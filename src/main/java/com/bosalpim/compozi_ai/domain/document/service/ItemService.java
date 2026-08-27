@@ -25,7 +25,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,6 +62,127 @@ public class ItemService {
 
         // 4. 데이터 일괄 저장 (Item, Issue, Group 등)
         return saveAllEntities(itemsToSave, existingItemsToUpdate, issues);
+    }
+
+    @Transactional
+    public List<Item> createManualItem(CreateManualItemDocumentListReqDto reqDtos, List<File> savedFiles) {
+
+        // 1. 검증 및 중복 매핑 결과 취득
+        List<CreateManualItemDocumentReqDto> itemDtos = reqDtos.getItems();
+        DuplicateValidationResult validationResult = itemDocumentDuplicateValidator.markDuplicatesForManual(
+                itemDtos, itemRepository.findAllByDeletedAtIsNullOrderByIdAsc()
+        );
+
+        // DB 업데이트 대상 및 신규 그룹 처리를 위한 변수 선언
+        List<Item> existingItemsToUpdate = new ArrayList<>();
+        List<Boolean> isDuplicateFlags = new ArrayList<>(); // 각 항목별 실질적 중복 여부 저장
+
+        // 2. DTO -> Item 엔티티 및 DuplicatedGroup 연관관계 구성
+        List<Item> itemsToSave = processManualItemsAndGroups(
+                itemDtos, validationResult, savedFiles, existingItemsToUpdate, isDuplicateFlags
+        );
+
+        // 3. 기타 이상 탐지 및 이슈(Issue) 수집
+        List<Issue> issues = detectManualIssues(itemsToSave, itemDtos, isDuplicateFlags);
+
+        // 4. 데이터 일괄 저장 (Item, Issue, Group 등)
+        return saveAllEntities(itemsToSave, existingItemsToUpdate, issues);
+    }
+
+    // ----- 아래는 ItemService 전용 private 메서드 -------
+
+    private List<Item> processManualItemsAndGroups(
+            List<CreateManualItemDocumentReqDto> reqDtos,
+            DuplicateValidationResult validationResult,
+            List<File> savedFiles,
+            List<Item> existingItemsToUpdate,
+            List<Boolean> isDuplicateFlags
+    ) {
+        Map<String, DuplicatedGroup> groupMap = new HashMap<>();
+        List<Item> items = new ArrayList<>();
+        Set<String> seenKeys = new HashSet<>();
+
+        @SuppressWarnings("unchecked")
+        List<CheckDuplicatedManualItemDto> checkedDtos =
+                (List<CheckDuplicatedManualItemDto>) validationResult.firstSeenInRequestMap();
+
+        for (int i = 0; i < reqDtos.size(); i++) {
+            CreateManualItemDocumentReqDto dto = reqDtos.get(i);
+            CheckDuplicatedManualItemDto checkedDto = checkedDtos.get(i);
+
+            String groupKey = checkedDto.getDuplicateGroupKey();
+            DuplicatedGroup group = resolveDuplicatedGroup(
+                    groupKey, groupMap, validationResult.existingDbMap(), existingItemsToUpdate
+            );
+
+            boolean isDuplicated = (groupKey != null) &&
+                    (validationResult.existingDbMap().containsKey(groupKey) || seenKeys.contains(groupKey));
+
+            if (groupKey != null) {
+                seenKeys.add(groupKey);
+            }
+            isDuplicateFlags.add(isDuplicated);
+
+            Set<ConstraintViolation<CreateManualItemDocumentReqDto>> violations = validator.validate(dto);
+            boolean hasMissingFieldOrDataLacking =
+                    !violations.isEmpty() || (checkedDto.getNormalizedItemName() == null);
+
+            ReviewStatus reviewStatus = determineReviewStatusV2(
+                    dto.getSpec(), dto.getUnit(), isDuplicated, hasMissingFieldOrDataLacking
+            );
+
+            // DTO -> Item 변환 (Manual 생성자 호출)
+            Item item = Item.CreateManualItem(
+                    dto,
+                    savedFiles.get(i),
+                    checkedDto.getNormalizedItemName(),
+                    group,
+                    reviewStatus
+            );
+            items.add(item);
+        }
+
+        return items;
+    }
+
+    private List<Issue> detectManualIssues(
+            List<Item> itemsToSave,
+            List<CreateManualItemDocumentReqDto> reqDtos,
+            List<Boolean> isDuplicateFlags
+    ) {
+        List<Issue> issues = new ArrayList<>();
+
+        for (int i = 0; i < itemsToSave.size(); i++) {
+            Item item = itemsToSave.get(i);
+            CreateManualItemDocumentReqDto dto = reqDtos.get(i);
+            boolean isDuplicated = isDuplicateFlags.get(i);
+
+            // 1. 규격(Spec) 불일치 검사
+            if (itemSpecAndUnitValidator.isSpecMismatch(dto.getSpec())) {
+                issues.add(Issue.create(IssueType.SPEC_MISMATCH, "규격 불일치", false, item));
+            }
+
+            // 2. 단위(Unit) 불일치 검사
+            if (itemSpecAndUnitValidator.isUnitMismatch(dto.getUnit())) {
+                issues.add(Issue.create(IssueType.UNIT_MISMATCH, "단위 불일치", false, item));
+            }
+
+            // 3. Jakarta Validator를 통한 필수값 누락 및 정규화 이름 누락 검사
+            Set<ConstraintViolation<CreateManualItemDocumentReqDto>> violations = validator.validate(dto);
+            boolean hasMissingField = !violations.isEmpty();
+            boolean isDataLacking = (item.getNormalizedItemName() == null);
+
+            if (isDataLacking || hasMissingField) {
+                issues.add(Issue.create(IssueType.MISSING_REQUIRED, "필수값 누락", false, item));
+            }
+
+            // 4. 중복 의심 이슈 등록
+            if (isDuplicated) {
+                issues.add(Issue.create(IssueType.DUPLICATE_SUSPECTED, "중복 의심", false, item));
+            }
+        }
+
+        return issues;
     }
 
     private List<Item> processItemsAndGroups(
@@ -226,51 +346,8 @@ public class ItemService {
         return ReviewStatus.NEW;
     }
 
-    // ----------------------------------------------------- 이전 코드 ----------------------------------------
+    // ----------------------------------------------------- 이전 코드 => inbox 사용 중이기 때문에 수정은 x  ----------------------------------------
 
-    @Transactional
-    public List<Item> createManualItem(CreateManualItemDocumentListReqDto reqDtos, List<File> savedFiles) {
-        List<CreateManualItemDocumentReqDto> itemDtos = reqDtos.getItems();
-        DuplicateValidationResult validationResult = itemDocumentDuplicateValidator.markDuplicatesForManual(itemDtos,
-                itemRepository.findAllByDeletedAtIsNullOrderByIdAsc());
-
-        @SuppressWarnings("unchecked")
-        List<CheckDuplicatedManualItemDto> checkedDtos = (List<CheckDuplicatedManualItemDto>) validationResult.firstSeenInRequestMap();
-
-        return processAndSaveItemsWithDbCheck(
-                itemDtos.size(),
-                i -> checkedDtos.get(i).getDuplicateGroupKey(),
-                validationResult.existingDbMap(),
-                (i, group, issueCollector, isDuplicate) -> {
-                    CreateManualItemDocumentReqDto itemDto = itemDtos.get(i);
-                    CheckDuplicatedManualItemDto checkedDto = checkedDtos.get(i);
-
-                    ReviewStatus reviewStatus = determineReviewStatus(itemDto.getSpec(), itemDto.getUnit(),
-                            isDuplicate);
-
-                    Set<ConstraintViolation<CreateManualItemDocumentReqDto>> violations = validator.validate(itemDto);
-                    boolean hasMissingField = !violations.isEmpty();
-                    boolean isDataLacking = checkedDto.getNormalizedItemName() == null;
-
-                    if (isDataLacking || (reviewStatus.equals(ReviewStatus.NEW)) && hasMissingField) {
-                        reviewStatus = ReviewStatus.NEEDS_REVIEW;
-                    }
-
-                    Item item = Item.CreateManualItem(
-                            itemDto,
-                            savedFiles.get(i),
-                            checkedDto.getNormalizedItemName(),
-                            group,
-                            reviewStatus
-                    );
-
-                    collectIssuesIfNeeded(item, itemDto.getSpec(), itemDto.getUnit(), issueCollector, hasMissingField,
-                            isDataLacking);
-
-                    return item;
-                }
-        );
-    }
 
     public ReviewStatus determineReviewStatus(String spec, String unit, boolean isDuplicate) {
         boolean hasSpecOrUnitIssue = itemSpecAndUnitValidator.isSpecMismatch(spec)
@@ -292,90 +369,5 @@ public class ItemService {
         }
     }
 
-    // --- [ 기존 그룹 병합 로직 수정 반영 메서드 ] ---
-    private List<Item> processAndSaveItemsWithDbCheck(
-            int size,
-            Function<Integer, String> keyExtractor,
-            Map<String, Item> existingDbMap,
-            QuadFunction<Integer, DuplicatedGroup, Consumer<Issue>, Boolean, Item> itemMapper
-    ) {
-        Map<String, DuplicatedGroup> groupMap = new HashMap<>();
-        Set<String> seenKeys = new HashSet<>();
 
-        List<Item> itemsToSave = new ArrayList<>();
-        List<Item> existingItemsToUpdate = new ArrayList<>();
-        List<Issue> issues = new ArrayList<>();
-
-        for (int i = 0; i < size; i++) {
-            String duplicateKey = keyExtractor.apply(i);
-            DuplicatedGroup group = null;
-
-            if (duplicateKey != null) {
-
-                // 기존 DB 항목이 이미 DuplicatedGroup을 가지고 있으면 해당 그룹을 재활용
-                group = groupMap.computeIfAbsent(duplicateKey, key -> {
-                    Item originalDbItem = existingDbMap.get(key);
-
-                    if (originalDbItem != null) {
-                        // 1. DB 항목에 이미 존재하는 중복 그룹이 있는 경우 -> 그 그룹 재사용
-                        if (originalDbItem.getDuplicatedGroup() != null) {
-                            return originalDbItem.getDuplicatedGroup();
-                        }
-
-                        // 2. DB 항목은 있지만 아직 중복 그룹이 없는 경우 -> 새 그룹 생성 및 DB 항목 업데이트
-                        DuplicatedGroup newGroup = DuplicatedGroup.create();
-                        originalDbItem.updateDuplicatedGroup(newGroup);
-                        existingItemsToUpdate.add(originalDbItem);
-                        return newGroup;
-                    }
-
-                    // 3. DB 항목도 없는 순수 요청 내 중복 -> 새 그룹 생성
-                    return DuplicatedGroup.create();
-                });
-            }
-
-            boolean isDuplicate = (duplicateKey != null) &&
-                    (existingDbMap.containsKey(duplicateKey) || seenKeys.contains(duplicateKey));
-
-            Item item = itemMapper.apply(i, group, issues::add, isDuplicate);
-            itemsToSave.add(item);
-
-            if (duplicateKey != null) {
-                if (isDuplicate) {
-                    issues.add(Issue.create(IssueType.DUPLICATE_SUSPECTED, "중복 의심", false, item));
-                } else {
-                    seenKeys.add(duplicateKey);
-                }
-            }
-        }
-
-        // 1. 신규 생성된 DuplicatedGroup 중 영속화되지 않은(id가 null인) 그룹들만 필터링하여 저장
-        List<DuplicatedGroup> newGroupsToSave = groupMap.values().stream()
-                .filter(g -> g.getId() == null)
-                .toList();
-
-        if (!newGroupsToSave.isEmpty()) {
-            duplicatedGroupRepository.saveAll(newGroupsToSave);
-        }
-
-        // 2. 그룹이 새로 할당된 기존 DB 데이터 업데이트
-        if (!existingItemsToUpdate.isEmpty()) {
-            itemRepository.saveAll(existingItemsToUpdate);
-        }
-
-        // 3. 신규 Item 일괄 저장
-        List<Item> savedItems = itemRepository.saveAll(itemsToSave);
-
-        // 4. 중복 이슈 저장
-        if (!issues.isEmpty()) {
-            issueRepository.saveAll(issues);
-        }
-
-        return savedItems;
-    }
-
-    @FunctionalInterface
-    public interface QuadFunction<T, U, V, W, R> {
-        R apply(T t, U u, V v, W w);
-    }
 }

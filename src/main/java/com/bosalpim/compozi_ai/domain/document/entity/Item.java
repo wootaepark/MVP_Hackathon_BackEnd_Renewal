@@ -85,21 +85,6 @@ public class Item extends BaseTimeStampEntity {
     @JoinColumn(name = "duplicated_group_id")
     private DuplicatedGroup duplicatedGroup;
 
-    @PrePersist
-    private void prePersist() {
-        if (this.docId == null) {
-            this.docId = "TEMP-" + UUID.randomUUID().toString().substring(0, 8);
-            // 디폴트 docId unique 중복 방지
-        }
-    }
-
-    @PostPersist
-    private void generateDocId() {
-        if (this.docId.startsWith("TEMP")) {
-            this.docId = String.format("M-%03d", this.id);
-        }
-    }
-
     public static Item CreateCommonItem(CreateCommonItemDocumentReqDto reqDto, File file, DuplicatedGroup group,
                                         ReviewStatus reviewStatus) {
 
@@ -138,6 +123,25 @@ public class Item extends BaseTimeStampEntity {
                 .effectiveDate(reqDto.getEffectiveDate())
                 .reviewStatus(reviewStatus)
                 .build();
+    }
+
+    private static String trimSafely(String value) {
+        return value == null ? null : value.trim();
+    }
+
+    @PrePersist
+    private void prePersist() {
+        if (this.docId == null) {
+            this.docId = "TEMP-" + UUID.randomUUID().toString().substring(0, 8);
+            // 디폴트 docId unique 중복 방지
+        }
+    }
+
+    @PostPersist
+    private void generateDocId() {
+        if (this.docId.startsWith("TEMP")) {
+            this.docId = String.format("M-%03d", this.id);
+        }
     }
 
     public void approve() {
@@ -186,9 +190,5 @@ public class Item extends BaseTimeStampEntity {
 
     public void delete() {
         this.deletedAt = LocalDateTime.now();
-    }
-
-    private static String trimSafely(String value) {
-        return value == null ? null : value.trim();
     }
 }

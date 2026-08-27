@@ -24,21 +24,6 @@ public class OcrType1Parser implements OcrSubParser { // 44_ 형태 pdf 및 이�
     private static final Pattern TYPE1_HEADER_PATTERN =
             Pattern.compile("품\\s*목.*규\\s*격(?:\\s*\\([^)]*\\))?.*단\\s*위.*기존\\s*단가.*변경\\s*단가.*적용\\s*일(?:자)?");
 
-    @Override
-    public boolean supports(List<String> ocrLines) {
-        if (ocrLines == null || ocrLines.isEmpty()) {
-            return false;
-        }
-        String fullText = String.join(" ", ocrLines);
-        return TYPE1_HEADER_PATTERN.matcher(fullText).find();
-    }
-
-    @Override
-    public List<CreateCommonItemDocumentReqDto> parse(List<String> ocrLines, MultipartFile file, ParseContext context,
-                                                      SourceType sourceType) {
-        return parseToDtos(ocrLines, context, sourceType);
-    }
-
     public static List<CreateCommonItemDocumentReqDto> parseToDtos(List<String> lines, ParseContext context,
                                                                    SourceType sourceType) {
         List<CreateCommonItemDocumentReqDto> resultList = new ArrayList<>();
@@ -219,5 +204,20 @@ public class OcrType1Parser implements OcrSubParser { // 44_ 형태 pdf 및 이�
             }
         }
         return -1;
+    }
+
+    @Override
+    public boolean supports(List<String> ocrLines) {
+        if (ocrLines == null || ocrLines.isEmpty()) {
+            return false;
+        }
+        String fullText = String.join(" ", ocrLines);
+        return TYPE1_HEADER_PATTERN.matcher(fullText).find();
+    }
+
+    @Override
+    public List<CreateCommonItemDocumentReqDto> parse(List<String> ocrLines, MultipartFile file, ParseContext context,
+                                                      SourceType sourceType) {
+        return parseToDtos(ocrLines, context, sourceType);
     }
 }
