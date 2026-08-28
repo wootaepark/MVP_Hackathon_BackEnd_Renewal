@@ -61,6 +61,8 @@ dependencies {
     //Amazon S3
     implementation 'software.amazon.awssdk:s3'
 //    implementation 'software.amazon.awssdk:s3-presigner'
+
+    implementation 'com.github.f4b6a3:tsid-creator:5.2.0'
 }
 
 //Q타입 생성 경로
