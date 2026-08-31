@@ -10,6 +10,8 @@ import com.bosalpim.compozi_ai.domain.document.dto.request.manualFile.CreateManu
 import com.bosalpim.compozi_ai.domain.document.entity.File;
 import com.bosalpim.compozi_ai.domain.document.entity.Item;
 import com.bosalpim.compozi_ai.domain.document.enums.ReviewStatus;
+import com.bosalpim.compozi_ai.domain.document.repository.item.IssueBulkRepository;
+import com.bosalpim.compozi_ai.domain.document.repository.item.ItemBulkRepository;
 import com.bosalpim.compozi_ai.domain.document.repository.item.ItemRepository;
 import com.bosalpim.compozi_ai.domain.inbox.entity.DuplicatedGroup;
 import com.bosalpim.compozi_ai.domain.inbox.entity.Issue;
@@ -26,9 +28,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ItemService {
@@ -39,11 +43,14 @@ public class ItemService {
     private final ItemDocumentDuplicateValidator itemDocumentDuplicateValidator;
     private final ItemSpecAndUnitValidator itemSpecAndUnitValidator;
     private final Validator validator;
+    private final ItemBulkRepository itemBulkRepository;
+    private final IssueBulkRepository issueBulkRepository;
 
     @Transactional
     // 아이템 이상 탐지 및 저장 서비스 메서드
     public List<Item> createCommonItem(List<CreateCommonItemDocumentReqDto> reqDtos, File savedFile) {
 
+        log.info(">>>> createCommonItem에 전달된 File ID: {}", savedFile.getId());
         // 1. 검증 및 중복 매핑 결과 취득
         DuplicateValidationResult validationResult = itemDocumentDuplicateValidator.markDuplicatesForCommon(
                 reqDtos, itemRepository.findAllByDeletedAtIsNullOrderByIdAsc()
@@ -307,19 +314,20 @@ public class ItemService {
         }
 
         // 2. 새로 생성된 중복 그룹이 할당된 기존 DB Item들 업데이트
-        if (!existingItemsToUpdate.isEmpty()) {
-            itemRepository.saveAll(existingItemsToUpdate);
-        }
+//        if (!existingItemsToUpdate.isEmpty()) {
+//            itemRepository.saveAll(existingItemsToUpdate);
+//        }
+        // 변경 감지(dirty checking ) 때문에 없애도 된다.
 
         // 3. 신규 Item 저장 (부모의 ID가 채워진 상태이므로 FK 정상 매핑)
-        List<Item> savedItems = itemRepository.saveAll(itemsToSave);
+        itemBulkRepository.saveAllItemsInBatch(itemsToSave, 5000);
 
         // 4. 수집된 Issue 저장
         if (!issues.isEmpty()) {
-            issueRepository.saveAll(issues);
+            issueBulkRepository.saveAllIssuesInBatch(issues, 5000);
         }
 
-        return savedItems;
+        return itemsToSave;
     }
 
     private ReviewStatus determineReviewStatusV2(

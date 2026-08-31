@@ -41,8 +41,9 @@ public class FileService {
             throw new CustomException(BadStatusCode.INVALID_FILE_PARSER_REQUEST);
         }
 
-        File savedFile = fileRepository.save(File.createFile(filename, InputMethod.FILE)); // 파일 정보 저장
-
+        File newFile = File.createFile(filename, InputMethod.FILE);
+        File savedFile = fileRepository.save(newFile);
+        
         List<Item> items = itemService.createCommonItem(parser.parse(file), savedFile);
         return CreateItemDocumentResDto.from(items);
 
