@@ -51,12 +51,17 @@ public class FileService {
         //List<Item> items = itemService.createCommonItem(parser.parse(file), savedFile);
 
         long s3Start = System.nanoTime();
-        List<Item> items = itemService.createCommonItem(parser.parse(file), savedFile);
+        List<CreateCommonItemDocumentReqDto> dtos = parser.parse(file);
         long s3End = System.nanoTime();
+
+        long s4Start = System.nanoTime();
+        List<Item> items = itemService.createCommonItem(dtos, savedFile);
+        long s4End = System.nanoTime();
 
         System.out.printf("[file 서비스] 0-1. 파서 추출 : %.2f ms%n", (s1End - s1Start) / 1_000_000.0);
         System.out.printf("[file 서비스] 0-2. file db 입력: %.2f ms%n", (s2End - s2Start) / 1_000_000.0);
-        System.out.printf("[file 서비스] 0-3. itemService 수행: %.2f ms%n", (s3End - s3Start) / 1_000_000.0);
+        System.out.printf("[file 서비스] 0-3. 파싱 수행 : %.2f ms%n", (s3End - s3Start) / 1_000_000.0);
+        System.out.printf("[file 서비스] 0-4. itemService 수행: %.2f ms%n", (s4End - s4Start) / 1_000_000.0);
         return CreateItemDocumentResDto.from(items);
 
     }
