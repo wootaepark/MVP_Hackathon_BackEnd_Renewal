@@ -19,6 +19,7 @@ public class ItemDocumentDuplicateValidator {
 
     private final ItemNameMapper itemNameMapper;
 
+
     // --- [ Common 파일 중복 검사 ] ---
     public DuplicateValidationResult markDuplicatesForCommon(List<CreateCommonItemDocumentReqDto> dtos,
                                                              List<Item> allExistingItems) {
@@ -26,43 +27,102 @@ public class ItemDocumentDuplicateValidator {
             return new DuplicateValidationResult(Map.of(), List.of());
         }
 
-        // DB 기존 데이터 Key -> Item 맵핑
-        Map<String, Item> existingDbMap = new HashMap<>();
-        for (Item item : allExistingItems) {
-            String key = generateKey(
-                    item.getSupplierName(), getEffectiveItemName(item), item.getSpec(),
-                    item.getUnit(), item.getPriceBefore(), item.getPriceAfter(), item.getEffectiveDate()
-            );
-            existingDbMap.putIfAbsent(key, item); // ID가 가장 작은 원본 1개만 유지
-        }
+        // 1. DTO 품목명 정규화 처리 (선행 조건)
+        normalizeItemNames(dtos);
 
-        // 현재 입력되는 데이터
-        Map<String, CreateCommonItemDocumentReqDto> firstSeenMap = new HashMap<>();
-        for (CreateCommonItemDocumentReqDto dto : dtos) {
-            String normalizedName = itemNameMapper.map(dto.getRawItemName());
-            dto.setNormalizedItemName(normalizedName);
+        // 2. 입력 파일 내부 (DTO 간) 중복 탐지 및 GroupKey 부여
+        markFileSelfDuplicates(dtos);
 
-            // 기존에는 저장 시 trim() 을 했지만 아래 코드는 저장 이전 상태이므로 trim() 이 따로 필요하다. -> unit 에만 적용
-            String key = generateKey(
-                    dto.getSupplierName(), getEffectiveItemName(dto), dto.getSpec().trim(),
-                    dto.getUnit().trim(), dto.getPriceBefore(), dto.getPriceAfter(), dto.getEffectiveDate()
-            );
-
-            // DB에 존재하거나 요청 목록 내에서 이미 등장했으면 Duplicate Group Key 부여
-            if (existingDbMap.containsKey(key) || firstSeenMap.containsKey(key)) {
-                dto.setDuplicateGroupKey(key);
-
-                // 요청 목록 내에서 처음 등장한 DTO에도 그룹 키가 비어있었다면 세팅
-                if (firstSeenMap.containsKey(key) && firstSeenMap.get(key).getDuplicateGroupKey() == null) {
-                    firstSeenMap.get(key).setDuplicateGroupKey(key);
-                }
-            } else {
-                firstSeenMap.put(key, dto);
-            }
-        }
+        // 3. DB 기존 데이터 매핑 및 DB 데이터와의 중복 탐지
+        Map<String, Item> existingDbMap = markDbDuplicates(dtos, allExistingItems);
 
         return new DuplicateValidationResult(existingDbMap, dtos);
     }
+
+    private void normalizeItemNames(List<CreateCommonItemDocumentReqDto> dtos) {
+        for (CreateCommonItemDocumentReqDto dto : dtos) {
+            String normalizedName = itemNameMapper.map(dto.getRawItemName());
+            dto.setNormalizedItemName(normalizedName);
+        }
+    }
+
+    private void markFileSelfDuplicates(List<CreateCommonItemDocumentReqDto> dtos) {
+
+        Map<CreateCommonItemDocumentReqDto, CreateCommonItemDocumentReqDto> firstSeenMap = new HashMap<>(135_000);
+
+        for (CreateCommonItemDocumentReqDto dto : dtos) {
+            CreateCommonItemDocumentReqDto firstSeenDto = firstSeenMap.get(dto);
+
+            if (firstSeenDto == null) {
+                // 최초 등장한 DTO는 Map에 등록
+                firstSeenMap.put(dto, dto);
+            } else {
+                // 이미 등장했던 DTO (중복)
+                // 필요 시점에만 String Key를 1회 생성하여 공유
+                if (firstSeenDto.getDuplicateGroupKey() == null) {
+                    String groupKey = generateKeyFromDto(firstSeenDto);
+                    firstSeenDto.setDuplicateGroupKey(groupKey);
+                }
+                // 후속 중복 DTO에도 동일한 GroupKey 할당
+                dto.setDuplicateGroupKey(firstSeenDto.getDuplicateGroupKey());
+            }
+        }
+    }
+
+
+    private Map<String, Item> markDbDuplicates(List<CreateCommonItemDocumentReqDto> dtos,
+                                               List<Item> allExistingItems) {
+        if (allExistingItems == null || allExistingItems.isEmpty()) {
+            return Map.of();
+        }
+
+        // DB 기존 데이터 Map 생성 (Key: String, Value: Item)
+        Map<String, Item> existingDbMap = new HashMap<>(allExistingItems.size());
+        for (Item item : allExistingItems) {
+            String dbKey = generateKeyFromItem(item);
+            existingDbMap.putIfAbsent(dbKey, item); // 최초 ID 원본만 보관
+        }
+
+        // DTO 목록 중 DB에 이미 존재하는 데이터 체크
+        for (CreateCommonItemDocumentReqDto dto : dtos) {
+            // 자가 중복으로 이미 GroupKey가 발급된 경우 해당 Key 사용, 없으면 신규 생성하여 비교
+            String dtoKey = (dto.getDuplicateGroupKey() != null)
+                    ? dto.getDuplicateGroupKey()
+                    : generateKeyFromDto(dto);
+
+            if (existingDbMap.containsKey(dtoKey)) {
+                dto.setDuplicateGroupKey(dtoKey);
+            }
+        }
+
+        return existingDbMap;
+    }
+
+    private String generateKeyFromDto(CreateCommonItemDocumentReqDto dto) {
+        return generateKey(
+                dto.getSupplierName(),
+                dto.getEffectiveItemName(),
+                dto.getSpec() != null ? dto.getSpec().trim() : "",
+                dto.getUnit() != null ? dto.getUnit().trim() : "",
+                dto.getPriceBefore(),
+                dto.getPriceAfter(),
+                dto.getEffectiveDate()
+        );
+    }
+
+    private String generateKeyFromItem(Item item) {
+        return generateKey(
+                item.getSupplierName(),
+                getEffectiveItemName(item),
+                item.getSpec(),
+                item.getUnit(),
+                item.getPriceBefore(),
+                item.getPriceAfter(),
+                item.getEffectiveDate()
+        );
+    }
+
+    // -----------------------------
 
     // --- [ Manual 파일 중복 검사 ] ---
     public DuplicateValidationResult markDuplicatesForManual(List<CreateManualItemDocumentReqDto> dtos,
