@@ -17,7 +17,6 @@ import com.bosalpim.compozi_ai.domain.inbox.entity.DuplicatedGroup;
 import com.bosalpim.compozi_ai.domain.inbox.entity.Issue;
 import com.bosalpim.compozi_ai.domain.inbox.enums.IssueType;
 import com.bosalpim.compozi_ai.domain.inbox.repository.DuplicatedGroupRepository;
-import com.bosalpim.compozi_ai.domain.inbox.repository.issue.IssueRepository;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 import java.util.ArrayList;
@@ -39,24 +38,28 @@ public class ItemService {
 
     private final ItemRepository itemRepository;
     private final DuplicatedGroupRepository duplicatedGroupRepository;
-    private final IssueRepository issueRepository;
     private final ItemDocumentDuplicateValidator itemDocumentDuplicateValidator;
     private final ItemSpecAndUnitValidator itemSpecAndUnitValidator;
     private final Validator validator;
     private final ItemBulkRepository itemBulkRepository;
     private final IssueBulkRepository issueBulkRepository;
 
-    @Transactional
     // 아이템 이상 탐지 및 저장 서비스 메서드
     public List<Item> createCommonItem(List<CreateCommonItemDocumentReqDto> reqDtos, File savedFile) {
 
+        long ABSOLUTE_START = System.nanoTime(); // ★ 최상단
         log.info(">>>> createCommonItem에 전달된 File ID: {}", savedFile.getId());
         // 1. 검증 및 중복 매핑 결과 취득
+
+        long step1Start = System.nanoTime();
         DuplicateValidationResult validationResult = itemDocumentDuplicateValidator.markDuplicatesForCommon(
                 reqDtos, itemRepository.findAllByDeletedAtIsNullOrderByIdAsc()
         );
+        long step1End = System.nanoTime();
 
         // DB 업데이트 대상 및 신규 그룹 처리를 위한 변수 선언
+
+        long step2Start = System.nanoTime();
         List<Item> existingItemsToUpdate = new ArrayList<>();
         List<Boolean> isDuplicateFlags = new ArrayList<>(); // 각 항목별 실질적 중복 여부 저장
 
@@ -64,11 +67,28 @@ public class ItemService {
         List<Item> itemsToSave = processItemsAndGroups(
                 reqDtos, validationResult, savedFile, existingItemsToUpdate, isDuplicateFlags
         );
+        long step2End = System.nanoTime();
+
         // 3. 기타 이상 탐지 및 이슈(Issue) 수집
+
+        long step3Start = System.nanoTime();
         List<Issue> issues = detectIssues(itemsToSave, reqDtos, isDuplicateFlags);
+        long step3End = System.nanoTime();
+
+        long step4Start = System.nanoTime();
+        List<Item> toSave = saveAllEntities(itemsToSave, existingItemsToUpdate, issues);
+        long step4End = System.nanoTime();
 
         // 4. 데이터 일괄 저장 (Item, Issue, Group 등)
-        return saveAllEntities(itemsToSave, existingItemsToUpdate, issues);
+        long ABSOLUTE_END = System.nanoTime(); // ★ 최상단
+
+        System.out.printf("[서비스 소요시간] 1. 검증 및 매핑: %.2f ms%n", (step1End - step1Start) / 1_000_000.0);
+        System.out.printf("[서비스 소요시간] 2. 연관 관계 구성: %.2f ms%n", (step2End - step2Start) / 1_000_000.0);
+        System.out.printf("[서비스 소요시간] 3. 기타 이상 탐지 및 이슈 수집: %.2f ms%n", (step3End - step3Start) / 1_000_000.0);
+        System.out.printf("[서비스 소요시간] 4. db 커밋 :  %.2f ms%n", (step4End - step4Start) / 1_000_000.0);
+        System.out.printf("[서비스 소요시간] 5. 총 시간 :  %.2f ms%n", (ABSOLUTE_END - ABSOLUTE_START) / 1_000_000.0);
+
+        return toSave;
     }
 
     @Transactional
@@ -93,7 +113,7 @@ public class ItemService {
         List<Issue> issues = detectManualIssues(itemsToSave, itemDtos, isDuplicateFlags);
 
         // 4. 데이터 일괄 저장 (Item, Issue, Group 등)
-        return saveAllEntities(itemsToSave, existingItemsToUpdate, issues);
+        return null;
     }
 
     // ----- 아래는 ItemService 전용 private 메서드 -------
@@ -303,6 +323,7 @@ public class ItemService {
             List<Issue> issues
     ) {
         // 1. 신규 Item 들에 연관된 DuplicatedGroup 중 아직 DB에 저장되지 않은(id가 null인) 그룹만 추출하여 우선 저장
+
         List<DuplicatedGroup> newGroupsToSave = itemsToSave.stream()
                 .map(Item::getDuplicatedGroup)
                 .filter(group -> group != null && group.getId() == null)

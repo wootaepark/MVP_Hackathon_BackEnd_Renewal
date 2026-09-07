@@ -31,20 +31,37 @@ public class FileService {
     public CreateItemDocumentResDto createCommonFile(MultipartFile file) throws IOException {
         String filename = file.getOriginalFilename(); // 파일 이름 추출
 
+        long s1Start = System.nanoTime();
         FileParser parser = fileParsers.stream()
                 .filter(p -> p.supports(filename))
                 .findFirst()
                 .orElseThrow(() -> new CustomException(BadStatusCode.UNSUPPORTED_FILE_TYPE));
         // 형식에 맞는 파서 추출
+        long s1End = System.nanoTime();
 
         if (parser.isOcrParser()) {
             throw new CustomException(BadStatusCode.INVALID_FILE_PARSER_REQUEST);
         }
 
+        long s2Start = System.nanoTime();
         File newFile = File.createFile(filename, InputMethod.FILE);
         File savedFile = fileRepository.save(newFile);
-        
-        List<Item> items = itemService.createCommonItem(parser.parse(file), savedFile);
+        long s2End = System.nanoTime();
+
+        //List<Item> items = itemService.createCommonItem(parser.parse(file), savedFile);
+
+        long s3Start = System.nanoTime();
+        List<CreateCommonItemDocumentReqDto> dtos = parser.parse(file);
+        long s3End = System.nanoTime();
+
+        long s4Start = System.nanoTime();
+        List<Item> items = itemService.createCommonItem(dtos, savedFile);
+        long s4End = System.nanoTime();
+
+        System.out.printf("[file 서비스] 0-1. 파서 추출 : %.2f ms%n", (s1End - s1Start) / 1_000_000.0);
+        System.out.printf("[file 서비스] 0-2. file db 입력: %.2f ms%n", (s2End - s2Start) / 1_000_000.0);
+        System.out.printf("[file 서비스] 0-3. 파싱 수행 : %.2f ms%n", (s3End - s3Start) / 1_000_000.0);
+        System.out.printf("[file 서비스] 0-4. itemService 수행: %.2f ms%n", (s4End - s4Start) / 1_000_000.0);
         return CreateItemDocumentResDto.from(items);
 
     }
@@ -75,9 +92,9 @@ public class FileService {
         File savedFile = fileRepository.save(File.createFile(saveFilename, InputMethod.FILE));
 
         // 2. 전달받은 CreateCommonItemDocumentReqDto 리스트를 그대로 사용해 Item 생성
-        List<Item> items = itemService.createCommonItem(reqDtos, savedFile);
+        //List<Item> items = itemService.createCommonItem(reqDtos, savedFile);
 
-        return CreateItemDocumentResDto.from(items);
+        return CreateItemDocumentResDto.from(List.of());
     }
 
 

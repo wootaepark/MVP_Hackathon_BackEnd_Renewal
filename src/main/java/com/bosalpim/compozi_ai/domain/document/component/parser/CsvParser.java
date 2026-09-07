@@ -20,28 +20,25 @@ public class CsvParser implements FileParser {
 
     @Override
     public List<CreateCommonItemDocumentReqDto> parse(MultipartFile file) {
-        List<CreateCommonItemDocumentReqDto> list = new ArrayList<>();
+        List<CreateCommonItemDocumentReqDto> list = new ArrayList<>(135_000);
 
         try (InputStreamReader inputStreamReader = new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8);
              CSVReader csvReader = new CSVReader(inputStreamReader)) {
 
-            List<String[]> rows = csvReader.readAll();
-            if (rows.isEmpty()) {
-                return list;
-            }
+            String[] row;
+            long rowNo = 0;
 
-            for (int i = 1; i < rows.size(); i++) {
-                String[] row = rows.get(i);
+            csvReader.readNext(); // 첫째 줄 건너뛰기
 
-                // 빈 행 스킵
-                if (row.length == 0 || (row.length == 1 && row[0].isBlank())) {
-                    continue;
-                }
+            // readAll() 대신에 한 줄 씩 읽기
+
+            while ((row = csvReader.readNext()) != null) {
+                rowNo++;
 
                 ParseCsvValueHelper.ParseContext context = new ParseCsvValueHelper.ParseContext();
 
                 CreateCommonItemDocumentReqDto dto = CreateCommonItemDocumentReqDto.builder()
-                        .rowNo((long) i)
+                        .rowNo(rowNo)
                         .docId(ParseCsvValueHelper.parseString(getValue(row, 0)))
                         .sourceType(ParseCsvValueHelper.parseString(getValue(row, 1)))
                         .supplierName(ParseCsvValueHelper.parseString(getValue(row, 2)))
@@ -55,7 +52,10 @@ public class CsvParser implements FileParser {
                         .build();
 
                 list.add(dto);
+
+
             }
+
 
         } catch (Exception e) {
             throw new CustomException(BadStatusCode.FILE_PARSE_FAILED);
