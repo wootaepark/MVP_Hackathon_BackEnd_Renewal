@@ -42,6 +42,7 @@ import lombok.NoArgsConstructor;
                 columnList = "supplier_name, normalized_item_name, spec, unit, price_before, price_after, effective_date"))
 public class Item extends BaseTimeStampEntity {
 
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -127,6 +128,12 @@ public class Item extends BaseTimeStampEntity {
 
     private static String trimSafely(String value) {
         return value == null ? null : value.trim();
+    }
+
+    public void assignGeneratedId(Long id) {
+        if (this.id == null) { // null 이 아니면 방어
+            this.id = id;
+        }
     }
 
     @PrePersist
